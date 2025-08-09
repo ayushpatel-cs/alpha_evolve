@@ -6,15 +6,16 @@ log_level: "INFO"
 # LLM configuration
 llm:
   # Ensemble requested by you
-  primary_model: "google/gemini-2.0-flash-lite"   # Gemini-Flash-2.0-lite
+  primary_model: "google/gemini-2.0-flash-lite-001"   # Gemini-Flash-2.0-lite
   primary_model_weight: 0.6
-  secondary_model: "google/gemini-2.0-flash"      # Gemini-Flash-2.0
+  secondary_model: "google/gemini-2.0-flash-001"      # Gemini-Flash-2.0
   secondary_model_weight: 0.4
   api_base: "https://openrouter.ai/api/v1"
   temperature: 0.6
   top_p: 0.95
   max_tokens: 8192
   timeout: 600
+
 
 # Prompt configuration
 prompt:
