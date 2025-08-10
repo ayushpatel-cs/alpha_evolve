@@ -111,6 +111,8 @@ def _build_pipeline(X_df: pd.DataFrame) -> Pipeline:
         max_depth=None,
         max_iter=400,
         l2_regularization=0.0,
+        tree_method="gpu_hist",    # GPU training
+        predictor="gpu_predictor", # GPU inference
         early_stopping=True,
         validation_fraction=0.1,
         random_state=0,

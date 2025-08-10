@@ -1,0 +1,80 @@
+# Configuration for Calorie Expenditure (Playground) evolution
+max_iterations: 100
+checkpoint_interval: 10
+log_level: "INFO"
+
+# LLM configuration
+llm:
+  # Ensemble (via OpenRouter)
+  primary_model: "google/gemini-2.0-flash-lite-001"
+  primary_model_weight: 0.6
+  secondary_model: "google/gemini-2.0-flash-001"
+  secondary_model_weight: 0.4
+  api_base: "https://openrouter.ai/api/v1"
+  temperature: 0.6
+  top_p: 0.95
+  max_tokens: 8192
+  timeout: 600
+
+# Prompt configuration
+prompt:
+  system_message: |
+    You are an expert ML engineer optimizing models for the Kaggle Playground
+    "Predict Calorie Expenditure" task.
+    You will REWRITE only the code inside the EVOLVE block of initial_program.py.
+
+    Objective:
+    - Minimize RMSLE (i.e., RMSE on log1p(Calories)) — the competition metric.
+    - The evaluator samples a fresh random validation split every run.
+    - Do NOT rely on global randomness; set seeds only locally if needed.
+
+    Contract you MUST follow in the EVOLVE block:
+    - Provide a function:
+        def fit_predict(train_df, test_df, train_idx, val_idx) -> dict:
+            - train_df: pandas DataFrame with "Calories" in training.
+            - test_df: pandas DataFrame without "Calories".
+            - train_idx, val_idx: numpy int indices into train_df (row-wise).
+            - Train ONLY on train_idx rows; NEVER use val rows for fitting or preprocessing stats.
+            - Return a dict with:
+                "val_pred": np.ndarray of Calories predictions for val_idx (same order/length),
+                "test_pred": np.ndarray of Calories predictions for ALL test rows,
+                "model_info": short string (optional).
+    - Fit on log1p(Calories) and output Calories by applying expm1 to model outputs.
+    - Handle missing values robustly; avoid fragile feature drops.
+    - Train the model on GPU when possible to decrease compute time.
+    - Keep runtime reasonable (sub-10 minutes per evaluation).
+    - Prefer sturdy baselines (e.g., Gradient Boosting, XGBoost/LightGBM if available),
+      reliable preprocessing (median/most_frequent imputers, OHE with handle_unknown="ignore"),
+      and avoid target leakage. Ignore obvious ID columns.
+
+    Style:
+    - Clean, deterministic, portable scikit-learn pipelines are preferred.
+    - Use OneHotEncoder(handle_unknown="ignore") for categoricals.
+    - Median/most_frequent imputers for safety.
+    - Clip negative predictions to 0.
+  num_top_programs: 3
+  use_template_stochasticity: true
+
+# Database / search configuration
+database:
+  population_size: 60
+  archive_size: 25
+  num_islands: 4
+  elite_selection_ratio: 0.3
+  exploitation_ratio: 0.7
+
+# Evaluator configuration
+evaluator:
+  timeout: 600
+  cascade_evaluation: true
+  # Score we maximize is 1/(1 + rmsle); good models ~0.83–0.89.
+  # Threshold semantics:
+  #   - First = Stage 1 -> Stage 2 promotion gate
+  #   - Second = Stage 2 keep/elite gate
+  cascade_thresholds: [0.94455, 0.945]
+  parallel_evaluations: 4
+  use_llm_feedback: false
+
+# Evolution settings
+diff_based_evolution: false    # allow full rewrites of the EVOLVE block
+allow_full_rewrites: true
