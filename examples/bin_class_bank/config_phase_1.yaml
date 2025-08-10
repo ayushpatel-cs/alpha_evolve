@@ -1,14 +1,13 @@
-# Configuration for House Prices (Ames) evolution
-max_iterations: 100
+# Configuration for Bank Binary Classification (Playground) evolution
+max_iterations: 200
 checkpoint_interval: 10
 log_level: "INFO"
 
 # LLM configuration
 llm:
-  # Ensemble requested by you
-  primary_model: "google/gemini-2.0-flash-lite-001"   # Gemini-Flash-2.0-lite
+  primary_model: "google/gemini-2.0-flash-lite-001"
   primary_model_weight: 0.6
-  secondary_model: "google/gemini-2.0-flash-001"      # Gemini-Flash-2.0
+  secondary_model: "google/gemini-2.0-flash-001"
   secondary_model_weight: 0.4
   api_base: "https://openrouter.ai/api/v1"
   temperature: 0.6
@@ -16,60 +15,71 @@ llm:
   max_tokens: 8192
   timeout: 600
 
+# Compute (hint flags; harmless if ignored by runner)
+compute:
+  use_gpu: true              # prefer CUDA if available
+  cuda_visible_devices: "0"  # which GPU to use; "" to disable
+  cpu_threads: -1            # allow sklearn CPU parallelism when GPU not used
 
 # Prompt configuration
 prompt:
   system_message: |
-    You are an expert ML engineer optimizing models for the Kaggle "House Prices: Advanced Regression Techniques" task.
-    You will REWRITE the code only inside the EVOLVE block of initial_program.py.
+    You are an expert ML engineer optimizing models for the Kaggle Playground
+    "Binary Classification with a Bank Dataset".
+
+    You will REWRITE only the code inside the EVOLVE block of initial_program.py.
 
     Objective:
-    - Minimize RMSE on log1p(SalePrice) (i.e., Kaggle competition metric).
-    - The evaluator samples a fresh random validation split every run.
-    - Do NOT rely on global randomness; set seeds only locally if needed.
+    - Maximize ROC AUC on the probability of the positive class (y=1).
+    - The evaluator samples a fresh random validation split each run (often stratified).
+    - Do NOT rely on global randomness; if needed, set seeds locally and deterministically.
+
+    **Compute preference (IMPORTANT):**
+    - If a CUDA-capable GPU is available (e.g., via torch.cuda.is_available() or environment),
+      prefer GPU-accelerated boosters. Otherwise, fall back to CPU.
+      * XGBoost (>=2.0): use `device="cuda"` (and `tree_method="hist"`).
+        For older XGBoost (<2.0): use `tree_method="gpu_hist"`.
+      * LightGBM: use `device_type="gpu"` (or `device="gpu"` in LGBMClassifier kwargs).
+      * CatBoost: use `task_type="GPU"`.
+    - Keep code version-tolerant: detect library versions and set the correct GPU params accordingly.
+    - Ensure predictions are probabilities in [0,1]. Keep runtime <10 minutes per evaluation.
 
     Contract you MUST follow in the EVOLVE block:
     - Provide a function:
         def fit_predict(train_df, test_df, train_idx, val_idx) -> dict:
-            - train_df: pandas DataFrame with "SalePrice" in training.
-            - test_df: pandas DataFrame without "SalePrice".
+            - train_df: pandas DataFrame with binary target column "y".
+            - test_df: pandas DataFrame without "y".
             - train_idx, val_idx: numpy int indices into train_df (row-wise).
-            - Train ONLY on train_idx rows; NEVER use val rows for fitting or preprocessing stats.
+            - Train ONLY on train_idx rows; NEVER use val rows (features, imputation stats, CV, or tuning).
             - Return a dict with:
-                "val_pred": np.ndarray of SalePrice predictions for val_idx (same order/length),
-                "test_pred": np.ndarray of SalePrice predictions for ALL test rows,
+                "val_pred": np.ndarray of probabilities P(y=1) for val_idx (same order/length),
+                "test_pred": np.ndarray of probabilities P(y=1) for ALL test rows,
                 "model_info": short string (optional).
-    - Fit on log1p(SalePrice) and predict SalePrice (apply expm1 to model outputs).
-    - Handle missing values robustly; avoid fragile feature drops.
-    - Keep runtime reasonable (sub-10 minutes per evaluation).
-    - Prefer sturdy baselines (e.g., Gradient Boosting, XGBoost/LightGBM if available),
-      reliable preprocessing (impute numerics/categoricals), and avoid target leakage.
 
-    Style:
-    - Clean, deterministic, portable scikit-learn pipelines are preferred.
-    - Use OneHotEncoder(handle_unknown="ignore") for categoricals.
-    - Median/most_frequent imputers for safety.
-    - Clip negative predictions to 0.
-  num_top_programs: 3
+    - Handle missing values robustly; avoid fragile feature drops.
+    - Prefer sturdy baselines (tree boosting via scikit-learn/XGBoost/LightGBM/CatBoost),
+      reliable preprocessing (numeric median impute; categorical most_frequent + OHE), and no leakage.
+    - Use OneHotEncoder(handle_unknown="ignore") for categoricals; impute missing values.
+  num_top_programs: 5
   use_template_stochasticity: true
 
 # Database / search configuration
 database:
-  population_size: 60
-  archive_size: 25
-  num_islands: 4
-  elite_selection_ratio: 0.3
-  exploitation_ratio: 0.7
+  population_size: 80
+  archive_size: 40
+  num_islands: 5
+  elite_selection_ratio: 0.25
+  exploitation_ratio: 0.65
 
 # Evaluator configuration
 evaluator:
-  timeout: 600                # generous: feature eng + boosting
+  timeout: 600
   cascade_evaluation: true
-  # Our score is 1/(1 + log_rmse); good models ~0.83–0.89
-  cascade_thresholds: [0.80, 0.87]
-  parallel_evaluations: 4
+  # For binary ROC AUC; modest thresholds for quick pruning then deeper eval
+  cascade_thresholds: [0.97, 0.975]
+  parallel_evaluations: 6
   use_llm_feedback: false
 
 # Evolution settings
-diff_based_evolution: false      # allow full rewrites of the EVOLVE block
+diff_based_evolution: false
 allow_full_rewrites: true

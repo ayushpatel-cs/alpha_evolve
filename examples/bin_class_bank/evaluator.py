@@ -275,7 +275,7 @@ def evaluate_stage1(program_path: str) -> dict:
     start = time.time()
     seed = int.from_bytes(os.urandom(4), "little")
     val_frac = 0.3
-    sample_rows = 600
+    sample_rows = 70000
 
     try:
         results = run_with_timeout(
