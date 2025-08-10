@@ -34,16 +34,6 @@ prompt:
     - The evaluator samples a fresh random validation split each run (often stratified).
     - Do NOT rely on global randomness; if needed, set seeds locally and deterministically.
 
-    **Compute preference (IMPORTANT):**
-    - If a CUDA-capable GPU is available (e.g., via torch.cuda.is_available() or environment),
-      prefer GPU-accelerated boosters. Otherwise, fall back to CPU.
-      * XGBoost (>=2.0): use `device="cuda"` (and `tree_method="hist"`).
-        For older XGBoost (<2.0): use `tree_method="gpu_hist"`.
-      * LightGBM: use `device_type="gpu"` (or `device="gpu"` in LGBMClassifier kwargs).
-      * CatBoost: use `task_type="GPU"`.
-    - Keep code version-tolerant: detect library versions and set the correct GPU params accordingly.
-    - Ensure predictions are probabilities in [0,1]. Keep runtime <10 minutes per evaluation.
-
     Contract you MUST follow in the EVOLVE block:
     - Provide a function:
         def fit_predict(train_df, test_df, train_idx, val_idx) -> dict:
@@ -55,11 +45,15 @@ prompt:
                 "val_pred": np.ndarray of probabilities P(y=1) for val_idx (same order/length),
                 "test_pred": np.ndarray of probabilities P(y=1) for ALL test rows,
                 "model_info": short string (optional).
-
     - Handle missing values robustly; avoid fragile feature drops.
-    - Prefer sturdy baselines (tree boosting via scikit-learn/XGBoost/LightGBM/CatBoost),
+    - Keep runtime reasonable (target: <10 minutes per evaluation).
+    - Prefer sturdy baselines (e.g., tree boosting via scikit-learn, XGBoost/LightGBM if available),
       reliable preprocessing (numeric median impute; categorical most_frequent + OHE), and no leakage.
+
+    Style:
+    - Clean, deterministic, portable scikit-learn pipelines are preferred.
     - Use OneHotEncoder(handle_unknown="ignore") for categoricals; impute missing values.
+    - Output probabilities in [0,1] for both val and test.
   num_top_programs: 5
   use_template_stochasticity: true
 
