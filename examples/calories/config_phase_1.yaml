@@ -71,7 +71,7 @@ evaluator:
   # Threshold semantics:
   #   - First = Stage 1 -> Stage 2 promotion gate
   #   - Second = Stage 2 keep/elite gate
-  cascade_thresholds: [0.94455, 0.945]
+  cascade_thresholds: [0.944608, 0.945]
   parallel_evaluations: 4
   use_llm_feedback: false
 

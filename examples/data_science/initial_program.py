@@ -40,18 +40,19 @@ Notes:
 from typing import Dict, Any, Tuple
 from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import OneHotEncoder
+from sklearn.preprocessing import OneHotEncoder, StandardScaler, QuantileTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import HistGradientBoostingRegressor
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import PowerTransformer
+from sklearn.ensemble import VotingRegressor
+
 
 def _prepare_features(
     df: pd.DataFrame, is_train: bool = True
 ) -> Tuple[pd.DataFrame, np.ndarray | None]:
     """
-    Basic cleaning:
-      - Leave all original columns except SalePrice for features.
-      - Don't drop columns aggressively; impute instead.
-      - Return (X_df, y) with y = log1p(SalePrice) if training.
+    Basic cleaning and feature prep.
     """
     df = df.copy()
 
@@ -59,69 +60,68 @@ def _prepare_features(
     if is_train:
         if "SalePrice" not in df.columns:
             raise ValueError("train_df must contain 'SalePrice'")
-        # Target transform for Kaggle metric (RMSE on log targets)
         y = np.log1p(df["SalePrice"].values.astype(float))
         df = df.drop(columns=["SalePrice"])
-
-    # Keep Id around if present; model won’t use it (we’ll drop explicitly)
-    # Avoid leakage by not adding engineered features from target.
 
     return df, y
 
 
-def _build_pipeline(X_df: pd.DataFrame) -> Pipeline:
+def _build_pipeline(X_df: pd.DataFrame, model_type: str = "hgb") -> Pipeline:
     """
-    Build a reasonably strong, fast baseline:
-      - Numeric: median impute
-      - Categorical: most_frequent impute + OneHotEncoder(handle_unknown='ignore')
-      - Model: HistGradientBoostingRegressor (handles large cardinality well after OHE; fast)
+    Build pipeline with preprocessing and model.
     """
-    # Identify columns by dtype (robust if categories come in as object)
     numeric_features = X_df.select_dtypes(include=[np.number]).columns.tolist()
     categorical_features = [c for c in X_df.columns if c not in numeric_features]
 
-    # Drop purely non-informative identifiers if present
     for ident in ["Id"]:
         if ident in numeric_features:
             numeric_features = [c for c in numeric_features if c != ident]
         if ident in categorical_features:
             categorical_features = [c for c in categorical_features if c != ident]
 
-    numeric_tf = Pipeline(
+    numeric_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="median")),
+            ("scaler", StandardScaler()),
+            ("powertransformer", PowerTransformer(method='yeo-johnson')),
         ]
     )
 
-    categorical_tf = Pipeline(
+    categorical_transformer = Pipeline(
         steps=[
             ("imputer", SimpleImputer(strategy="most_frequent")),
-            ("ohe", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
+            ("onehot", OneHotEncoder(handle_unknown="ignore", sparse_output=False)),
         ]
     )
 
     preprocessor = ColumnTransformer(
         transformers=[
-            ("num", numeric_tf, numeric_features),
-            ("cat", categorical_tf, categorical_features),
+            ("num", numeric_transformer, numeric_features),
+            ("cat", categorical_transformer, categorical_features),
         ],
-        remainder="drop",
-        n_jobs=None,  # keep simple/portable
+        remainder="passthrough",  # or 'drop'
+        n_jobs=None,
     )
 
-    model = HistGradientBoostingRegressor(
-        loss="squared_error",
-        learning_rate=0.06,
-        max_depth=None,
-        max_iter=500,
-        l2_regularization=0.0,
-        early_stopping=True,
-        validation_fraction=0.1,
-        random_state=0,
-    )
+    if model_type == "hgb":
+        model = HistGradientBoostingRegressor(
+            loss="squared_error",
+            learning_rate=0.01,
+            max_depth=6,
+            max_iter=1000,
+            l2_regularization=0.01,
+            early_stopping=True,
+            validation_fraction=0.1,
+            random_state=42,
+            #max_bins=255,
+        )
+    elif model_type == "ridge":
+        model = Ridge(alpha=10.0, random_state=42)  # Example alternative
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")
 
-    pipe = Pipeline(steps=[("prep", preprocessor), ("model", model)])
-    return pipe
+    pipeline = Pipeline(steps=[("preprocessor", preprocessor), ("model", model)])
+    return pipeline
 
 
 def fit_predict(
@@ -131,40 +131,38 @@ def fit_predict(
     val_idx: np.ndarray,
 ) -> Dict[str, Any]:
     """
-    Train on train_idx and predict on val_idx and the entire test_df.
-
-    Returns:
-        {
-          "val_pred": np.ndarray of predicted SalePrice for validation rows (aligned with val_idx),
-          "test_pred": np.ndarray of predicted SalePrice for all rows in test_df,
-          "model_info": str (optional)
-        }
+    Fit and predict using the pipeline.
     """
-    # Split & prepare
     X_all, y_all = _prepare_features(train_df, is_train=True)
     X_test, _ = _prepare_features(test_df, is_train=False)
-
-    # Build pipeline fit on train subset
-    pipe = _build_pipeline(X_all)
 
     X_tr = X_all.iloc[train_idx]
     y_tr = y_all[train_idx]
     X_va = X_all.iloc[val_idx]
 
-    pipe.fit(X_tr, y_tr)
+    # Train HGB
+    hgb_pipeline = _build_pipeline(X_all, model_type="hgb")
+    hgb_pipeline.fit(X_tr, y_tr)
+    val_log_pred_hgb = hgb_pipeline.predict(X_va)
+    test_log_pred_hgb = hgb_pipeline.predict(X_test)
 
-    # Predict log targets, invert with expm1, clip to non-negative
-    val_log_pred = pipe.predict(X_va)
-    test_log_pred = pipe.predict(X_test)
+    # Train Ridge
+    ridge_pipeline = _build_pipeline(X_all, model_type="ridge")
+    ridge_pipeline.fit(X_tr, y_tr)
+    val_log_pred_ridge = ridge_pipeline.predict(X_va)
+    test_log_pred_ridge = ridge_pipeline.predict(X_test)
+    
+    # Ensemble the predictions
+    val_log_pred = 0.7 * val_log_pred_hgb + 0.3 * val_log_pred_ridge
+    test_log_pred = 0.7 * test_log_pred_hgb + 0.3 * test_log_pred_ridge
 
     val_pred = np.expm1(val_log_pred).astype(float)
     test_pred = np.expm1(test_log_pred).astype(float)
 
-    # Safety: ensure no negatives due to numerical noise
     val_pred = np.clip(val_pred, a_min=0.0, a_max=None)
     test_pred = np.clip(test_pred, a_min=0.0, a_max=None)
 
-    info = f"pipe={pipe.__class__.__name__}, model={pipe.named_steps['model'].__class__.__name__}"
+    info = f"HGB pipe={hgb_pipeline.__class__.__name__}, model={hgb_pipeline.named_steps['model'].__class__.__name__} + Ridge pipe={ridge_pipeline.__class__.__name__}, model={ridge_pipeline.named_steps['model'].__class__.__name__}"
 
     return {
         "val_pred": val_pred,
