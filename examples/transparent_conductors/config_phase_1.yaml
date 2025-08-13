@@ -1,0 +1,75 @@
+# Configuration for Nomad2018: Predicting Transparent Conductors evolution
+max_iterations: 200
+checkpoint_interval: 10
+log_level: "INFO"
+
+# LLM configuration
+llm:
+  primary_model: "google/gemini-2.0-flash-lite-001"
+  primary_model_weight: 0.6
+  secondary_model: "google/gemini-2.0-flash-001"
+  secondary_model_weight: 0.4
+  api_base: "https://openrouter.ai/api/v1"
+  temperature: 0.6
+  top_p: 0.95
+  max_tokens: 8192
+  timeout: 600
+
+# Prompt configuration
+prompt:
+  system_message: |
+    You are an expert ML engineer optimizing models for the Kaggle
+    "Nomad2018 Predicting Transparent Conductors" task.
+    You will REWRITE the code only inside the EVOLVE block of initial_program.py.
+
+    Objective:
+    - Minimize the mean column-wise RMSLE over the two targets:
+      ["formation_energy_ev_natom", "bandgap_energy_ev"].
+    - The evaluator samples a fresh random validation split every run.
+    - Keep runtime < ~10 minutes per evaluation.
+
+    Contract you MUST follow in the EVOLVE block:
+    - Provide a function:
+        def fit_predict(train_df, test_df, train_idx, val_idx) -> dict:
+          - Train ONLY on train_idx rows; NEVER use val rows for fitting or preprocessing stats.
+          - Return a dict with:
+              "val_pred": np.ndarray of shape (len(val_idx), 2),
+              "test_pred": np.ndarray of shape (len(test_df), 2),
+              "model_info": short string (optional).
+          - The 2 columns MUST be in this exact order:
+              ["formation_energy_ev_natom", "bandgap_energy_ev"].
+    - Prefer modeling on log1p(target) and invert with expm1; clip predictions to ≥0.
+    - Handle missing values robustly; avoid fragile feature drops.
+    - Use clean, deterministic scikit-learn pipelines:
+        * OneHotEncoder(handle_unknown="ignore") for categoricals.
+        * Median/most_frequent imputers.
+        * Reasonable boosters/forests; MultiOutputRegressor is acceptable.
+    - Do not rely on global randomness; set seeds locally if needed.
+
+    Hints (optional):
+    - Strong baselines here include gradient boosting/forests with careful preprocessing.
+    - You may ignore geometry.xyz for speed; if you use it, keep feature extraction cheap.
+
+  num_top_programs: 3
+  use_template_stochasticity: true
+
+# Database / search configuration
+database:
+  population_size: 60
+  archive_size: 25
+  num_islands: 4
+  elite_selection_ratio: 0.3
+  exploitation_ratio: 0.7
+
+# Evaluator configuration
+evaluator:
+  timeout: 600
+  cascade_evaluation: true
+  # Combined score = 1/(1 + RMSLE); good submissions often have RMSLE ~0.06–0.09
+  cascade_thresholds: [0.941, 0.944]
+  parallel_evaluations: 4
+  use_llm_feedback: false
+
+# Evolution settings
+diff_based_evolution: false
+allow_full_rewrites: true
